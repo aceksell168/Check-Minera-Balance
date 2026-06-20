@@ -7,17 +7,6 @@ let rawVisible = false;
 let autoRefreshTimer = null;
 let lastWithdrawIds = new Set();
 let autoCheckEnabled = false;
-let mockMode = false; // Fallback mode jika backend tidak tersedia
-
-// Mock data untuk development
-const MOCK_USERS = [
-  { id: 1, username: 'rendy', password: 'asd123', role: 'admin', fullName: 'Rendy' },
-  { id: 2, username: 'fendi', password: 'asd123', role: 'admin', fullName: 'Fendi' },
-  { id: 3, username: 'navin', password: 'asd123', role: 'user', fullName: 'Navin' },
-  { id: 4, username: 'ridwan', password: 'asd123', role: 'user', fullName: 'Ridwan' },
-  { id: 5, username: 'joni', password: 'asd123', role: 'user', fullName: 'Joni' }
-];
-let mockHistory = [];
 
 // ============= AUTH FUNCTIONS =============
 async function handleLogin() {
@@ -29,46 +18,27 @@ async function handleLogin() {
     return;
   }
   
-  // Try backend first
   try {
-    const response = await Promise.race([
-      fetch(`${API_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-    ]);
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
     
     const data = await response.json();
+    
     if (data.token) {
       authToken = data.token;
       currentUser = data.user;
       localStorage.setItem('authToken', authToken);
       localStorage.setItem('currentUser', JSON.stringify(currentUser));
-      mockMode = false;
       showMainApp();
       loadHistory();
-      return;
+    } else {
+      alert('❌ ' + (data.message || 'Login gagal'));
     }
   } catch (err) {
-    console.warn('Backend not available, using mock mode:', err.message);
-    mockMode = true;
-  }
-  
-  // Fallback to mock authentication
-  const user = MOCK_USERS.find(u => u.username === username && u.password === password);
-  if (user) {
-    authToken = 'mock_token_' + Math.random();
-    currentUser = { id: user.id, username: user.username, role: user.role, fullName: user.fullName };
-    localStorage.setItem('authToken', authToken);
-    localStorage.setItem('currentUser', JSON.stringify(currentUser));
-    mockMode = true;
-    showMainApp();
-    loadHistory();
-    showToast('ℹ️ Menggunakan mode offline (backend tidak tersedia)', 'info');
-  } else {
-    alert('❌ Username atau password salah');
+    alert('❌ Backend tidak tersedia: ' + err.message);
   }
 }
 
@@ -123,12 +93,6 @@ function handleChangePassword() {
     return;
   }
   
-  if (mockMode) {
-    showToast('✓ Password berhasil diubah (mock)', 'success');
-    hideChangePasswordModal();
-    return;
-  }
-  
   fetch(`${API_URL}/auth/change-password`, {
     method: 'POST',
     headers: {
@@ -150,11 +114,6 @@ function handleChangePassword() {
 }
 
 function loadHistory() {
-  if (mockMode) {
-    renderHistory(mockHistory);
-    return;
-  }
-  
   fetch(`${API_URL}/history`, {
     headers: { 'Authorization': `Bearer ${authToken}` }
   })
@@ -199,13 +158,6 @@ function renderHistory(historyItems) {
 
 function clearAllHistory() {
   if (!confirm('Hapus semua history? Ini tidak bisa dibatalkan.')) return;
-  
-  if (mockMode) {
-    mockHistory = [];
-    showToast('✓ History berhasil dihapus (mock)', 'success');
-    loadHistory();
-    return;
-  }
   
   fetch(`${API_URL}/admin/history`, {
     method: 'DELETE',
@@ -386,7 +338,6 @@ async function fetchAllWithdraws(url, opts, appendRaw){
     if(appendRaw){ appendRaw('\n\nWITHDRAW RESPONSE PAGE ' + safety + ':\n' + txt); }
     if(!r.ok) throw new Error('HTTP '+r.status+' pada withdraw endpoint');
     let j; try{ j = JSON.parse(txt); }catch(e){ throw new Error('Withdraw response tidak valid JSON'); }
-    // find list
     let list = get(j, opts.listPath) || j;
     if(Array.isArray(list)) all.push(...list);
     else {
@@ -394,7 +345,6 @@ async function fetchAllWithdraws(url, opts, appendRaw){
       if(arrayPaths.length === 1){ const p = arrayPaths[0]; const found = get(j,p); if(Array.isArray(found)) all.push(...found); }
       else if(arrayPaths.length > 1 && safety===1){ throw new Error('Banyak kandidat array withdraw: ' + arrayPaths.join(', ')); }
     }
-    // pagination
     const meta = j && j.meta ? j.meta : null;
     if(meta && (meta.hasMore === true || meta.has_more === true)){
       const nextCursor = meta.cursor || meta.nextCursor || meta.next_cursor || null;
@@ -425,12 +375,9 @@ function renderWithdrawTable(details){
 }
 
 function showSection(sectionId){
-  // hide all sections
   document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));
-  // show target section
   const target = document.getElementById(sectionId);
   if(target) target.classList.add('active');
-  // update nav buttons
   document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
   document.getElementById('nav-'+sectionId)?.classList.add('active');
 }
@@ -456,7 +403,6 @@ async function fetchBalances(){
   const withdrawSummary = document.getElementById('withdrawSummary');
   const reconcileStatus = document.getElementById('reconcileStatus');
 
-  // prepare fetch options
   const finalEndpoint = endpoint || 'https://api-service.minerapay.com/v1/merchant/balance';
   const headers = {'Accept':'application/json'}; if(auth) headers['Authorization']=auth;
   const fetchOpts = { headers };
@@ -474,7 +420,6 @@ async function fetchBalances(){
     pendingEl.textContent = formatNumber(pending);
     totalBalanceEl.textContent = formatNumber(active+pending);
 
-    // fetch withdraws if provided
     let details = [];
     let sumAmount=0,sumFee=0,count=0,sumAmountGT=0,sumFeeGT=0,countGT=0,sumAmountLT=0,sumFeeLT=0,countLT=0;
     if(withdrawEndpoint){
@@ -486,13 +431,11 @@ async function fetchBalances(){
         if(startDateValue) url.searchParams.set('start_date', new Date(startDateValue).toISOString());
         if(endDateValue) url.searchParams.set('end_date', new Date(endDateValue).toISOString());
         urlString = url.toString();
-      }catch(e){
-        // fallback to raw string if URL not valid
-      }
+      }catch(e){}
       const optsForWithdraw = { headers: fetchOpts.headers, listPath: withdrawListPath };
       if(fetchOpts.credentials) optsForWithdraw.credentials = fetchOpts.credentials;
       const appendRaw = (s)=>{ rawEl.textContent += s; if(rawVisible) rawCard.style.display = 'block'; };
-        const all = await fetchAllWithdraws(urlString, optsForWithdraw, appendRaw);
+      const all = await fetchAllWithdraws(urlString, optsForWithdraw, appendRaw);
       count = all.length;
       for(const it of all){
         const amt = Number(get(it, withdrawAmountPath) || it.amount || it.value || it.nominal || 0);
@@ -500,7 +443,7 @@ async function fetchBalances(){
         const fee = Number(getField(it, ['disbursementFee','disbursement_fee','fee','withdraw_fee','admin_fee','commission','charge'])) || ((a>10000000)?3500:1600);
         sumFee += fee;
         if(a>10000000){ sumAmountGT+=a; sumFeeGT+=fee; countGT++; } else { sumAmountLT+=a; sumFeeLT+=fee; countLT++; }
-            const rawStatus = getField(it, ['status','transactionStatus','transaction_status']);
+        const rawStatus = getField(it, ['status','transactionStatus','transaction_status']);
         const recordId = getField(it, ['id','referenceNo','reference_no','ref','trxRef','transactionRef','reference']);
         details.push({
           id: recordId,
@@ -553,7 +496,6 @@ Total Fee : ${formatNumber(sumFee)}
       reconciledBadge.innerHTML = `<span class="status-badge ${isKlop ? 'status-klop' : 'status-error'}">${isKlop ? 'KLOP' : 'SELISIH'}</span>`;
     }
 
-    // Log to backend history
     if (authToken) {
       recordCheckHistory(document.getElementById('endpoint').value, statusText, diff);
     }
@@ -593,7 +535,6 @@ function exportCSV(){
   alert('✓ File CSV berhasil diunduh');
 }
 
-// UI wiring
 function saveSettings() {
   const settings = {
     endpoint: document.getElementById('endpoint').value.trim(),
@@ -626,12 +567,6 @@ function recordCheckHistory(endpoint, status, difference) {
     difference: difference,
     endpoint: endpoint
   };
-  
-  if (mockMode) {
-    mockHistory.push(entry);
-    loadHistory();
-    return;
-  }
   
   fetch(`${API_URL}/balance/check`, {
     method: 'POST',
@@ -668,9 +603,6 @@ function loadSettings(){
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  // Check backend status
-  checkBackendStatus();
-  
   const saved = localStorage.getItem('authToken');
   const user = localStorage.getItem('currentUser');
   if (saved && user) {
@@ -700,28 +632,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
   setupAutoCheckToggle();
 });
-
-function checkBackendStatus() {
-  const statusEl = document.getElementById('backendStatus');
-  if (!statusEl) return;
-  
-  fetch(`${API_URL}/auth/me`, {
-    headers: { 'Authorization': 'Bearer test' },
-    signal: AbortSignal.timeout(3000)
-  })
-  .then(() => {
-    statusEl.innerHTML = '✅ Backend tersedia - Gunakan dengan database persisten';
-    statusEl.style.background = '#dcfce7';
-    statusEl.style.color = '#166534';
-    statusEl.style.borderColor = '#86efac';
-  })
-  .catch(() => {
-    statusEl.innerHTML = '⚠️ Backend tidak tersedia - Dashboard akan berjalan di mode offline (data disimpan di browser saja)';
-    statusEl.style.background = '#fef3c7';
-    statusEl.style.color = '#92400e';
-    statusEl.style.borderColor = '#fcd34d';
-  });
-}
 
 window.fetchBalances = fetchBalances;
 window.copyToClipboard = copyToClipboard;
