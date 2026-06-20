@@ -2,176 +2,228 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcryptjs = require('bcryptjs');
-const fs = require('fs');
-const path = require('path');
+const mongoose = require('mongoose');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = 'minerapay-secret-key-2026';
-const DB_PATH = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DB_PATH, 'users.json');
-const HISTORY_FILE = path.join(DB_PATH, 'history.json');
+// ========== KONEKSI MONGODB ==========
+mongoose.connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log('✅ MongoDB Connected!'))
+.catch(err => console.log('❌ MongoDB Error:', err.message));
 
-// Ensure data directory exists
-if (!fs.existsSync(DB_PATH)) fs.mkdirSync(DB_PATH);
+// ========== SCHEMA & MODEL ==========
+const UserSchema = new mongoose.Schema({
+    username: { type: String, unique: true, required: true },
+    password: { type: String, required: true },
+    role: { type: String, default: 'user' },
+    fullName: { type: String }
+});
 
-// Initialize users.json if not exists
-if (!fs.existsSync(USERS_FILE)) {
-  const defaultUsers = [
-    { id: 1, username: 'rendy', password: bcryptjs.hashSync('asd123', 10), role: 'admin', fullName: 'Rendy' },
-    { id: 2, username: 'fendi', password: bcryptjs.hashSync('asd123', 10), role: 'admin', fullName: 'Fendi' },
-    { id: 3, username: 'navin', password: bcryptjs.hashSync('asd123', 10), role: 'user', fullName: 'Navin' },
-    { id: 4, username: 'ridwan', password: bcryptjs.hashSync('asd123', 10), role: 'user', fullName: 'Ridwan' },
-    { id: 5, username: 'joni', password: bcryptjs.hashSync('asd123', 10), role: 'user', fullName: 'Joni' }
-  ];
-  fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2));
-}
+const HistorySchema = new mongoose.Schema({
+    username: String,
+    fullName: String,
+    role: String,
+    timestamp: { type: Date, default: Date.now },
+    reconcileStatus: String,
+    difference: Number,
+    endpoint: String
+});
 
-// Initialize history.json if not exists
-if (!fs.existsSync(HISTORY_FILE)) {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
-}
+const User = mongoose.model('User', UserSchema);
+const History = mongoose.model('History', HistorySchema);
 
-// Utility functions
-function readUsers() { return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8')); }
-function writeUsers(users) { fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2)); }
-function readHistory() { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')); }
-function writeHistory(history) { fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2)); }
+const JWT_SECRET = process.env.JWT_SECRET || 'minerapay-secret-key-2026';
 
-// Middleware: verify JWT
+// ========== MIDDLEWARE ==========
 function verifyToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: 'No token' });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    res.status(401).json({ message: 'Invalid token' });
-  }
+    const token = req.headers['authorization']?.split(' ')[1];
+    if (!token) return res.status(401).json({ message: 'No token' });
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (err) {
+        res.status(401).json({ message: 'Invalid token' });
+    }
 }
 
-// Middleware: admin only
 function adminOnly(req, res, next) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
-  next();
+    if (req.user?.role !== 'admin') return res.status(403).json({ message: 'Admin only' });
+    next();
 }
 
-// ROUTES
+// ========== ROUTES ==========
 
-// 1. Login
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  const users = readUsers();
-  const user = users.find(u => u.username === username);
-  
-  if (!user || !bcryptjs.compareSync(password, user.password)) {
-    return res.status(401).json({ message: 'Invalid credentials' });
-  }
-  
-  const token = jwt.sign({ id: user.id, username: user.username, role: user.role, fullName: user.fullName }, JWT_SECRET, { expiresIn: '24h' });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role, fullName: user.fullName } });
+// Root
+app.get('/', (req, res) => {
+    res.json({
+        status: 'OK',
+        message: 'MineraPay Backend is running on Render!',
+        endpoints: {
+            health: '/api/health',
+            login: '/api/auth/login',
+            changePassword: '/api/auth/change-password'
+        }
+    });
 });
 
-// 2. Get current user
+// Health
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'OK', message: 'Server running on Render!' });
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const user = await User.findOne({ username });
+        
+        if (!user || !bcryptjs.compareSync(password, user.password)) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+        
+        const token = jwt.sign({
+            id: user._id,
+            username: user.username,
+            role: user.role,
+            fullName: user.fullName
+        }, JWT_SECRET, { expiresIn: '24h' });
+        
+        res.json({
+            token,
+            user: {
+                id: user._id,
+                username: user.username,
+                role: user.role,
+                fullName: user.fullName
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get current user
 app.get('/api/auth/me', verifyToken, (req, res) => {
-  res.json(req.user);
+    res.json(req.user);
 });
 
-// 3. Change password
-app.post('/api/auth/change-password', verifyToken, (req, res) => {
-  const { oldPassword, newPassword } = req.body;
-  const users = readUsers();
-  const user = users.find(u => u.id === req.user.id);
-  
-  if (!user || !bcryptjs.compareSync(oldPassword, user.password)) {
-    return res.status(401).json({ message: 'Old password is incorrect' });
-  }
-  
-  user.password = bcryptjs.hashSync(newPassword, 10);
-  writeUsers(users);
-  res.json({ message: 'Password changed successfully' });
+// Change password
+app.post('/api/auth/change-password', verifyToken, async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        const user = await User.findById(req.user.id);
+        
+        if (!user || !bcryptjs.compareSync(oldPassword, user.password)) {
+            return res.status(401).json({ message: 'Old password is incorrect' });
+        }
+        
+        user.password = bcryptjs.hashSync(newPassword, 10);
+        await user.save();
+        res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 4. Fetch balances & withdraws (existing logic) + log history
-app.post('/api/balance/check', verifyToken, (req, res) => {
-  const { endpoint, auth, pathActive, pathPending, reconcileStatus, difference } = req.body;
-  const history = readHistory();
-  
-  const entry = {
-    id: Date.now(),
-    username: req.user.username,
-    fullName: req.user.fullName,
-    role: req.user.role,
-    timestamp: new Date().toISOString(),
-    reconcileStatus: reconcileStatus || 'PENDING',
-    difference: difference || 0,
-    endpoint: endpoint
-  };
-  
-  history.push(entry);
-  writeHistory(history);
-  
-  res.json({ message: 'Check recorded', entry });
+// Check balance
+app.post('/api/balance/check', verifyToken, async (req, res) => {
+    try {
+        const { endpoint, auth, pathActive, pathPending, reconcileStatus, difference } = req.body;
+        
+        const entry = new History({
+            username: req.user.username,
+            fullName: req.user.fullName,
+            role: req.user.role,
+            reconcileStatus: reconcileStatus || 'PENDING',
+            difference: difference || 0,
+            endpoint: endpoint
+        });
+        
+        await entry.save();
+        res.json({ message: 'Check recorded', entry });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 5. Get history (admin sees all, user sees only their own)
-app.get('/api/history', verifyToken, (req, res) => {
-  const history = readHistory();
-  let filtered = history;
-  
-  if (req.user.role === 'user') {
-    filtered = history.filter(h => h.username === req.user.username);
-  }
-  
-  // Sort by timestamp descending
-  filtered.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  res.json(filtered);
+// Get history
+app.get('/api/history', verifyToken, async (req, res) => {
+    try {
+        let filter = {};
+        if (req.user.role === 'user') {
+            filter = { username: req.user.username };
+        }
+        const history = await History.find(filter).sort({ timestamp: -1 });
+        res.json(history);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 6. Get history for dashboard (pagination)
-app.get('/api/history/page', verifyToken, (req, res) => {
-  const { page = 1, limit = 10 } = req.query;
-  const history = readHistory();
-  let filtered = history;
-  
-  if (req.user.role === 'user') {
-    filtered = history.filter(h => h.username === req.user.username);
-  }
-  
-  filtered.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const paginated = filtered.slice(start, start + parseInt(limit));
-  
-  res.json({ data: paginated, total, page, limit });
+// Get history with pagination
+app.get('/api/history/page', verifyToken, async (req, res) => {
+    try {
+        const { page = 1, limit = 10 } = req.query;
+        let filter = {};
+        if (req.user.role === 'user') {
+            filter = { username: req.user.username };
+        }
+        
+        const total = await History.countDocuments(filter);
+        const data = await History.find(filter)
+            .sort({ timestamp: -1 })
+            .skip((page - 1) * limit)
+            .limit(parseInt(limit));
+        
+        res.json({ data, total, page, limit });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 7. Admin: Get all users
-app.get('/api/admin/users', verifyToken, adminOnly, (req, res) => {
-  const users = readUsers();
-  res.json(users.map(u => ({ id: u.id, username: u.username, role: u.role, fullName: u.fullName })));
+// Admin: Get all users
+app.get('/api/admin/users', verifyToken, adminOnly, async (req, res) => {
+    try {
+        const users = await User.find({}, { password: 0 });
+        res.json(users);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 8. Admin: Reset user password
-app.post('/api/admin/reset-password/:userId', verifyToken, adminOnly, (req, res) => {
-  const users = readUsers();
-  const user = users.find(u => u.id === parseInt(req.params.userId));
-  
-  if (!user) return res.status(404).json({ message: 'User not found' });
-  
-  user.password = bcryptjs.hashSync('asd123', 10);
-  writeUsers(users);
-  res.json({ message: 'Password reset to asd123' });
+// Admin: Reset password
+app.post('/api/admin/reset-password/:userId', verifyToken, adminOnly, async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        
+        user.password = bcryptjs.hashSync('asd123', 10);
+        await user.save();
+        res.json({ message: 'Password reset to asd123' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 9. Admin: Clear history
-app.delete('/api/admin/history', verifyToken, adminOnly, (req, res) => {
-  writeHistory([]);
-  res.json({ message: 'History cleared' });
+// Admin: Clear history
+app.delete('/api/admin/history', verifyToken, adminOnly, async (req, res) => {
+    try {
+        await History.deleteMany({});
+        res.json({ message: 'History cleared' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-const PORT = 3001;
-app.listen(PORT, () => console.log(`✓ Backend running on http://localhost:${PORT}`));
+// ========== START SERVER ==========
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Server running on port ${PORT}`);
+});
