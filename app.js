@@ -1,4 +1,4 @@
-const API_URL = 'https://check-minera-balance.onrender.com';
+const API_URL = 'https://check-minera-balance.onrender.com/api';
 let authToken = null;
 let currentUser = null;
 let currentWithdrawData = [];
