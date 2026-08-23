@@ -222,6 +222,20 @@ app.delete('/api/admin/history', verifyToken, adminOnly, async (req, res) => {
     }
 });
 
+app.post('/api/setup', async (req, res) => {
+    try {
+        const { username, password, fullName } = req.body;
+        const existing = await User.findOne({ username });
+        if (existing) return res.json({ message: 'User sudah ada' });
+        const hashed = bcryptjs.hashSync(password, 10);
+        const user = new User({ username, password: hashed, role: 'admin', fullName });
+        await user.save();
+        res.json({ message: 'User created!', user });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
